@@ -1,0 +1,35 @@
+#!/usr/bin/env -S uv run --script -q
+# vim: set filetype=python:
+# /// script
+# requires-python = ">=3.9"
+# dependencies = [
+#     "pyelftools>=0.32",
+# ]
+# ///
+
+import argparse
+from elftools.elf.elffile import ELFFile
+
+checksum_offset = 0x1C
+
+
+def run():
+    parser = argparse.ArgumentParser(description="INDX bootloader amalgamation builder")
+    parser.add_argument("src", help="Path to ELF file to examine")
+
+    args = parser.parse_args()
+
+    with open(args.src, "rb") as src_file:
+        src_elf = ELFFile(src_file)
+        addrs = [
+            segment["p_paddr"]
+            for segment in src_elf.iter_segments(type="PT_LOAD")
+            if segment["p_filesz"] != 0
+        ]
+        if len(addrs) == 0:
+            raise Exception("No loadable segments within ELF source")
+        print(min(addrs))
+
+
+if __name__ == "__main__":
+    run()

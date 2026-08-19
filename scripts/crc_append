@@ -1,0 +1,51 @@
+#!/usr/bin/env -S uv run --script -q
+# vim: set filetype=python:
+# /// script
+# requires-python = ">=3.9"
+# dependencies = []
+# ///
+
+
+import argparse
+from os import stat
+import struct
+import zlib
+
+checksum_offset = 0x1C
+
+
+def run():
+    parser = argparse.ArgumentParser(description="INDX bootloader amalgamation builder")
+    parser.register("type", "hexadecimal integer", lambda s: int(s, 16))
+    parser.add_argument(
+        "offset", help="Offset of file when loaded in flash", type="hexadecimal integer"
+    )
+    parser.add_argument("file", help="Path to file to append CRC to")
+    parser.add_argument(
+        "--fix-crc-pointer",
+        help="Also fix up the CRC32 pointer at offset 0x1C",
+        action="store_true",
+    )
+
+    args = parser.parse_args()
+
+    file_len = stat(args.file).st_size
+    with open(args.file, "r+b") as file:
+        if args.fix_crc_pointer:
+            file.seek(0x1C, 0)
+            file.write(struct.pack("<I", file_len + args.offset))
+        file.seek(0x1C, 0)
+        crc_pointer = struct.unpack("<I", file.read(4))[0] - args.offset
+
+        if crc_pointer != file_len and crc_pointer != file_len - 4:
+            raise Exception("CRC pointer must point to end of file")
+
+        file.seek(0, 0)
+        checksum = zlib.crc32(file.read(crc_pointer))
+
+        file.seek(crc_pointer)
+        file.write(struct.pack("<I", checksum))
+
+
+if __name__ == "__main__":
+    run()

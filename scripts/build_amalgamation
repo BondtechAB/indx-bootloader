@@ -1,0 +1,75 @@
+#!/usr/bin/env -S uv run --script -q
+# vim: set filetype=python:
+# /// script
+# requires-python = ">=3.9"
+# dependencies = [
+#     "pyelftools>=0.32",
+# ]
+# ///
+
+import argparse
+from elftools.elf.elffile import ELFFile
+
+checksum_offset = 0x1C
+
+
+# Create a binary file out of the loadable ELF segments that have data in them.
+# This is equivalent to `objcopy -O binary`.
+def build_binary(file: ELFFile):
+    loads = [s for s in file.iter_segments(type="PT_LOAD")]
+    base = None
+    out = bytearray()
+    for segment in loads:
+        if segment["p_filesz"] == 0:
+            continue
+
+        pstart = segment["p_paddr"]
+        pend = pstart + segment["p_filesz"]
+
+        if base is None:
+            base = pstart
+        end = pend - base
+        if len(out) < end:
+            missing = end - len(out)
+            out = out + bytearray([0xFF] * missing)
+        out[pstart - base : pend - base] = segment.data()
+    if base is None:
+        raise Exception("No loadable segments within ELF source")
+    return (base, out)
+
+
+def run():
+    parser = argparse.ArgumentParser(description="INDX bootloader amalgamation builder")
+    parser.add_argument("boot1", help="Path to initial bootloader ELF file")
+    parser.add_argument("boot2", help="Path to chained bootloader ELF file")
+    parser.add_argument("output", help="Path to resulting bootloader")
+
+    args = parser.parse_args()
+
+    with open(args.boot1, "rb") as boot1_file, open(args.boot2, "rb") as boot2_file:
+        boot1_elf = ELFFile(boot1_file)
+        boot2_elf = ELFFile(boot2_file)
+
+        base1, bin1 = build_binary(boot1_elf)
+        base2, bin2 = build_binary(boot2_elf)
+
+        if len(bin1) > base2:
+            raise Exception("Chained image overlaps with initial image")
+
+        boot2_end = base2 + len(bin2)
+
+        combined = bytearray([0xFF] * (base2 + len(bin2)))
+        combined[base1 : base1 + len(bin1)] = bin1
+        combined[base2:boot2_end] = bin2
+
+        # Copy the boot2 checksum pointer and version info to boot1
+        combined[base1 + checksum_offset : base1 + checksum_offset + 8] = bin2[
+            checksum_offset : checksum_offset + 8
+        ]
+
+        with open(args.output, "wb") as f:
+            f.write(combined)
+
+
+if __name__ == "__main__":
+    run()
